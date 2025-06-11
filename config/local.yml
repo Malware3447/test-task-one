@@ -1,3 +1,10 @@
+env: local
+
+app:
+  env: local
+  name: temp-go
+  version: v0.0.1
+
 postgres:
   type: postgres
   host: localhost

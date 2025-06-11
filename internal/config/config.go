@@ -1,8 +1,15 @@
 package config
 
-import "test-task-one/internal/config/db"
+import (
+	"github.com/Malware3447/configo"
+)
 
 type Config struct {
-	DatabasePg db.Database `yaml:"postgres" env-required:"true"`
-	DatabaseCh db.Database `yaml:"clickhouse" env-required:"true"`
+	App        configo.App      `yaml:"app" env-required:"true"`
+	DatabasePg configo.Database `yaml:"postgres" env-required:"true"`
+	DatabaseCh configo.Database `yaml:"clickhouse" env-required:"true"`
+}
+
+func (c Config) Env() string {
+	return c.App.Env
 }
