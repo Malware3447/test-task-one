@@ -12,7 +12,7 @@
 
 3. Скопируйте файл конфигурации:
    ```bash
-   cp config/sample.yml config/local.yml
+   cp config/sample.yml config/local.yml.yml
    ```
 
 ## Настройка конфигурации

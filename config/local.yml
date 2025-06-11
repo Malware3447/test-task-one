@@ -1,0 +1,22 @@
+postgres:
+  type: postgres
+  host: localhost
+  port: 5432
+  name: market_data_service
+  user: demo
+  password: demo
+  schema: public
+  maxAttempts: 5
+  attemptDelay: 5s
+  migrationPath: migrations/pg
+
+clickhouse:
+  type: "clickhouse"
+  host: "localhost"
+  port: 9000
+  name: "default"
+  user: "demo"
+  password: "demo"
+  migrationPath: "migrations/ch"
+  maxAttempts: 5
+  attemptDelay: 1s

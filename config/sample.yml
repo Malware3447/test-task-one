@@ -1,0 +1,22 @@
+postgres:
+  type:
+  host:
+  port:
+  name:
+  user:
+  password:
+  schema:
+  maxAttempts:
+  attemptDelay:
+  migrationPath:
+
+clickhouse:
+  type:
+  host:
+  port:
+  name:
+  user:
+  password:
+  migrationPath:
+  maxAttempts:
+  attemptDelay:
