@@ -2,8 +2,9 @@ package ch
 
 import (
 	"context"
-	"database/sql/driver"
 	"fmt"
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"test-task-one/internal/models/ch"
 )
 
