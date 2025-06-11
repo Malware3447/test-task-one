@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: test-task-one-postgres
+    environment:
+      POSTGRES_DB: test-task-one
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: test-task-one-clickhouse
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: demo
+      CLICKHOUSE_PASSWORD: demo
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+
+  redis:
+    image: redis:alpine
+    container_name: test-task-one-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  redis_data:
