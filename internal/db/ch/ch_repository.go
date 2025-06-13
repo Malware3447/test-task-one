@@ -38,18 +38,10 @@ func (r *RepositoryCh) LogEvent(ctx context.Context, event *ch.Event) error {
         )
     `
 
-	var desc interface{}
-	if event.Description != nil {
-		desc = *event.Description
-	} else {
-		desc = nil
-	}
-
 	err := r.db.Exec(ctx, query,
 		clickhouse.Named("id", event.ID),
 		clickhouse.Named("project_id", event.ProjectID),
 		clickhouse.Named("name", event.Name),
-		clickhouse.Named("description", desc),
 		clickhouse.Named("priority", event.Priority),
 		clickhouse.Named("removed", event.Removed),
 		clickhouse.Named("event_time", event.EventTime),

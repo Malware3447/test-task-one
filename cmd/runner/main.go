@@ -49,6 +49,10 @@ func main() {
 	}
 	defer natsClient.Close()
 
+	log.Println("NATS успешно запущен")
+
+	log.Println("Сервер успешно запущен")
+
 	repoPg := pg.NewRepositoryPg(poolPg, natsClient)
 	repoCh := ch.NewRepositoryCh(poolCh)
 

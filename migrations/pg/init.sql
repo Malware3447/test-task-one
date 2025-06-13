@@ -4,6 +4,8 @@ CREATE TABLE projects (
                           created_at TIMESTAMP DEFAULT NOW()
 );
 
+INSERT INTO projects (name) VALUES ('первая запись');
+
 CREATE TABLE goods (
                        id SERIAL PRIMARY KEY,
                        project_id INT NOT NULL REFERENCES projects(id),

@@ -25,42 +25,36 @@ func NewRepositoryPg(db *pgxpool.Pool, nats *nats.NATSClient) Repository {
 	}
 }
 
-// CreateGood создает новую запись с автоматическим приоритетом
 func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name string) (*pg.Good, error) {
-	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	// Проверяем, существует ли проект
+	var exists bool
+	err := r.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)", projectID).Scan(&exists)
 	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+		return nil, fmt.Errorf("failed to check project existence: %w", err)
 	}
-	defer tx.Rollback(ctx)
 
-	var maxPriority int32
-	err = tx.QueryRow(ctx, `
-        SELECT COALESCE(MAX(priority), 0) 
-        FROM goods 
-        WHERE project_id = $1
-        FOR UPDATE
-    `, projectID).Scan(&maxPriority)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get max priority: %w", err)
+	// Если проект не существует, создаем новый
+	if !exists {
+		const insertProject = `INSERT INTO projects (name) VALUES ($1) RETURNING id`
+		err := r.db.QueryRow(ctx, insertProject, fmt.Sprintf("Project for good: %s", name)).Scan(&projectID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert project: %w", err)
+		}
 	}
+
+	// Теперь вставляем товар
+	const insertGood = `INSERT INTO goods (project_id, name, priority)
+    VALUES ($1, $2, (SELECT COALESCE(MAX(priority), 0) + 1 FROM goods WHERE project_id = $1))
+    RETURNING id, priority, created_at`
 
 	newGood := &pg.Good{
 		ProjectID: projectID,
 		Name:      name,
-		Priority:  maxPriority + 1,
-		CreatedAt: time.Now(),
 	}
 
-	_, err = tx.Exec(ctx, `
-        INSERT INTO goods (project_id, name, priority, created_at)
-        VALUES ($1, $2, $3, $4)
-    `, newGood.ProjectID, newGood.Name, newGood.Priority, newGood.CreatedAt)
+	err = r.db.QueryRow(ctx, insertGood, projectID, name).Scan(&newGood.ID, &newGood.Priority, &newGood.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert good: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	event := &ch.Event{
@@ -68,8 +62,7 @@ func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name str
 		ProjectID: newGood.ProjectID,
 		Name:      newGood.Name,
 		Priority:  newGood.Priority,
-		Removed:   false,
-		EventTime: time.Now(),
+		EventTime: newGood.CreatedAt,
 	}
 	if err := r.nats.PublishEvent(ctx, event); err != nil {
 		// Логируем ошибку, но не прерываем выполнение

@@ -42,6 +42,7 @@ func (c *Crut) CreateGood(w http.ResponseWriter, r *http.Request) {
 	IdGood, err := strconv.Atoi(projectId)
 	if err != nil {
 		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		log.Printf("%s: Failed to parse project ID: %v", op, err)
 		return
 	}
 
@@ -53,6 +54,11 @@ func (c *Crut) CreateGood(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response, err := c.repoPg.CreateGood(ctx, int32(IdGood), body.Name)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		log.Printf("%s: Failed to create good: %v", op, err)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
