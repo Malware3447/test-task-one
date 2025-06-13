@@ -5,22 +5,28 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5"
-	"test-task-one/internal/models"
+	"test-task-one/internal/models/ch"
+	"test-task-one/internal/models/pg"
+	"test-task-one/internal/nats"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type RepositoryPg struct {
-	db *pgxpool.Pool
+	db   *pgxpool.Pool
+	nats *nats.NATSClient
 }
 
-func NewRepositoryPg(db *pgxpool.Pool) Repository {
-	return &RepositoryPg{db: db}
+func NewRepositoryPg(db *pgxpool.Pool, nats *nats.NATSClient) Repository {
+	return &RepositoryPg{
+		db:   db,
+		nats: nats,
+	}
 }
 
 // CreateGood создает новую запись с автоматическим приоритетом
-func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name string) (*models.Good, error) {
+func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name string) (*pg.Good, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -38,7 +44,7 @@ func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name str
 		return nil, fmt.Errorf("failed to get max priority: %w", err)
 	}
 
-	newGood := &models.Good{
+	newGood := &pg.Good{
 		ProjectID: projectID,
 		Name:      name,
 		Priority:  maxPriority + 1,
@@ -57,11 +63,24 @@ func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name str
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	event := &ch.Event{
+		ID:        newGood.ID,
+		ProjectID: newGood.ProjectID,
+		Name:      newGood.Name,
+		Priority:  newGood.Priority,
+		Removed:   false,
+		EventTime: time.Now(),
+	}
+	if err := r.nats.PublishEvent(ctx, event); err != nil {
+		// Логируем ошибку, но не прерываем выполнение
+		fmt.Printf("Failed to publish event: %v\n", err)
+	}
+
 	return newGood, nil
 }
 
-func (r *RepositoryPg) GetGood(ctx context.Context, id int32) (*models.Good, error) {
-	var good models.Good
+func (r *RepositoryPg) GetGood(ctx context.Context, id int32) (*pg.Good, error) {
+	var good pg.Good
 	err := r.db.QueryRow(ctx, `
         SELECT id, project_id, name, description, priority, removed, created_at 
         FROM goods 
@@ -85,7 +104,7 @@ func (r *RepositoryPg) GetGood(ctx context.Context, id int32) (*models.Good, err
 	return &good, nil
 }
 
-func (r *RepositoryPg) UpdateGood(ctx context.Context, id int32, name, description *string) (*models.Good, error) {
+func (r *RepositoryPg) UpdateGood(ctx context.Context, id int32, name, description *string) (*pg.Good, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -117,6 +136,19 @@ func (r *RepositoryPg) UpdateGood(ctx context.Context, id int32, name, descripti
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	event := &ch.Event{
+		ID:          good.ID,
+		ProjectID:   good.ProjectID,
+		Name:        good.Name,
+		Description: good.Description,
+		Priority:    good.Priority,
+		Removed:     good.Removed,
+		EventTime:   time.Now(),
+	}
+	if err := r.nats.PublishEvent(ctx, event); err != nil {
+		fmt.Printf("Failed to publish event: %v\n", err)
+	}
+
 	return good, nil
 }
 
@@ -143,10 +175,21 @@ func (r *RepositoryPg) MarkAsRemoved(ctx context.Context, id int32) error {
 		return fmt.Errorf("failed to mark as removed: %w", err)
 	}
 
+	event := &ch.Event{
+		ID:        good.ID,
+		ProjectID: good.ProjectID,
+		Name:      good.Name,
+		Removed:   true,
+		EventTime: time.Now(),
+	}
+	if err := r.nats.PublishEvent(ctx, event); err != nil {
+		fmt.Printf("Failed to publish event: %v\n", err)
+	}
+
 	return tx.Commit(ctx)
 }
 
-func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriority int32) ([]models.Good, error) {
+func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriority int32) ([]pg.Good, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -190,9 +233,9 @@ func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriori
 	}
 	defer rows.Close()
 
-	var updated []models.Good
+	var updated []pg.Good
 	for rows.Next() {
-		var g models.Good
+		var g pg.Good
 		err := rows.Scan(&g.ID, &g.Priority)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan priority: %w", err)
@@ -203,7 +246,7 @@ func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriori
 	return updated, tx.Commit(ctx)
 }
 
-func (r *RepositoryPg) ListGoods(ctx context.Context, limit, offset int32) ([]models.Good, int, int, error) {
+func (r *RepositoryPg) ListGoods(ctx context.Context, limit, offset int32) ([]pg.Good, int, int, error) {
 	var total int
 	err := r.db.QueryRow(ctx, "SELECT COUNT(*) FROM goods").Scan(&total)
 	if err != nil {
@@ -227,9 +270,9 @@ func (r *RepositoryPg) ListGoods(ctx context.Context, limit, offset int32) ([]mo
 	}
 	defer rows.Close()
 
-	var goods []models.Good
+	var goods []pg.Good
 	for rows.Next() {
-		var g models.Good
+		var g pg.Good
 		err := rows.Scan(
 			&g.ID,
 			&g.ProjectID,

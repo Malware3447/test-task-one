@@ -3,7 +3,7 @@ package pg
 import (
 	"context"
 	"test-task-one/internal/db/pg"
-	"test-task-one/internal/models"
+	models "test-task-one/internal/models/pg"
 )
 
 type Service struct {
