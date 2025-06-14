@@ -44,14 +44,12 @@ func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name str
 	}
 	defer tx.Rollback(ctx)
 
-	// Проверяем, существует ли проект
 	var exists bool
 	err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1) FOR UPDATE", projectID).Scan(&exists)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check project existence: %w", err)
 	}
 
-	// Если проект не существует, создаем новый
 	if !exists {
 		const insertProject = `INSERT INTO projects (name) VALUES ($1) RETURNING id`
 		err := tx.QueryRow(ctx, insertProject, fmt.Sprintf("Project for good: %s", name)).Scan(&projectID)
@@ -173,11 +171,9 @@ func (r *RepositoryPg) UpdateGood(ctx context.Context, id int32, name, descripti
 		fmt.Printf("Failed to publish event: %v\n", err)
 	}
 
-	// Кешируем обновленные данные
 	cacheKey := fmt.Sprintf("good:%d", id)
 	jsonData, err := json.Marshal(good)
 	if err == nil {
-		// Устанавливаем кеш без времени истечения
 		if err := r.redis.Set(ctx, cacheKey, jsonData, 0).Err(); err != nil {
 			fmt.Printf("Failed to cache updated good: %v\n", err)
 		}
@@ -236,7 +232,6 @@ func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriori
 	}
 	defer tx.Rollback(ctx)
 
-	// Обновляем приоритет для указанной записи
 	_, err = tx.Exec(ctx, `
         UPDATE goods 
         SET priority = $1 
@@ -246,7 +241,6 @@ func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriori
 		return responses.Reprioritize{}, fmt.Errorf("failed to update priority for id %d: %w", id, err)
 	}
 
-	// Обновляем приоритеты для записей с меньшим id
 	_, err = tx.Exec(ctx, `
         UPDATE goods 
         SET priority = priority + 1 
@@ -256,7 +250,6 @@ func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriori
 		return responses.Reprioritize{}, fmt.Errorf("failed to update priorities for other goods: %w", err)
 	}
 
-	// Получаем все обновленные записи
 	rows, err := tx.Query(ctx, `
         SELECT id, priority 
         FROM goods 
@@ -276,7 +269,6 @@ func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriori
 		}
 		updatedPriorities = append(updatedPriorities, p)
 
-		// Отправляем событие в NATS для каждой измененной записи
 		event := &ch.Event{
 			ID:        p.Id,
 			Priority:  p.Priority,
@@ -300,7 +292,6 @@ func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriori
 func (r *RepositoryPg) ListGoods(ctx context.Context, limit, offset int32) (responses.List, error) {
 	cacheKey := fmt.Sprintf("goods:list:%d:%d", limit, offset)
 
-	// Попытка получить данные из кеша
 	cachedData, err := r.redis.Get(ctx, cacheKey).Bytes()
 	if err == nil {
 		var cachedList responses.List
@@ -309,7 +300,6 @@ func (r *RepositoryPg) ListGoods(ctx context.Context, limit, offset int32) (resp
 		}
 	}
 
-	// Если данных нет в кеше или произошла ошибка при их получении, выполняем запрос к БД
 	var total int32
 	err = r.db.QueryRow(ctx, "SELECT COUNT(*) FROM goods").Scan(&total)
 	if err != nil {
@@ -361,7 +351,6 @@ func (r *RepositoryPg) ListGoods(ctx context.Context, limit, offset int32) (resp
 		Goods: goods,
 	}
 
-	// Кешируем результат в Redis на 1 минуту
 	jsonData, err := json.Marshal(resp)
 	if err == nil {
 		r.redis.Set(ctx, cacheKey, jsonData, time.Minute)
