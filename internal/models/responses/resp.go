@@ -2,26 +2,6 @@ package responses
 
 import "time"
 
-type Create struct {
-	Id          int32     `json:"id"`
-	ProjectId   int32     `json:"projectId"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Priority    int32     `json:"priority"`
-	Removed     bool      `json:"removed"`
-	CreatedAt   time.Time `json:"createdAt"`
-}
-
-type Update struct {
-	Id          int32     `json:"id"`
-	ProjectId   int32     `json:"projectId"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Priority    int32     `json:"priority"`
-	Removed     bool      `json:"removed"`
-	CreatedAt   time.Time `json:"createdAt"`
-}
-
 type Remove struct {
 	Id         int32 `json:"id"`
 	CampaignId int32 `json:"campaignId"`

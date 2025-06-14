@@ -58,7 +58,7 @@ func (c *NATSClient) ProcessMessages(subject string, handler func(*ch.Event) err
 	}
 	defer sub.Unsubscribe()
 
-	select {} // Блокируем выполнение, чтобы продолжать получать сообщения
+	select {}
 }
 
 func (c *NATSClient) Close() {
