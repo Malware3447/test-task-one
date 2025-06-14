@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log"
 	"test-task-one/internal/request"
 )
 
@@ -17,5 +18,7 @@ func (a *App) Init(ctx context.Context) {
 	const op = "app.Init"
 	ctx = context.WithValue(ctx, "app", op)
 
-	a.router.Init(ctx)
+	go a.router.Init(ctx)
+
+	log.Println("Роутер инициализирован")
 }
