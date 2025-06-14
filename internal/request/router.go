@@ -29,11 +29,15 @@ func (r *Router) Init(ctx context.Context) {
 	r.router.Route("/task/v1", func(router chi.Router) {
 		router.Route("/good", func(router chi.Router) {
 			router.Post("/create/{projectId}/", r.crtServ.CreateGood)
+			router.Patch("/update/{projectId}/{id}/", r.crtServ.GoodUpdate)
+			router.Delete("/remove/{projectId}/{id}/", r.crtServ.GoodRemove)
+			router.Patch("/reprioritiize/{projectId}/{id}/", r.crtServ.ReprioritizeGood)
 		})
+		router.Get("/goods/list/{limit}/{offset}/", r.crtServ.GoodList)
 	})
 
 	go func() {
-		if err := http.ListenAndServe(fmt.Sprintf(":%v", 8080), r.router); err != nil {
+		if err := http.ListenAndServe(fmt.Sprintf(":%v", 8081), r.router); err != nil {
 			panic(fmt.Sprintf("%v: %v", op, err))
 		}
 	}()

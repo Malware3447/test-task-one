@@ -6,6 +6,7 @@ import (
 	"github.com/Malware3447/configo"
 	"github.com/Malware3447/sch"
 	"github.com/Malware3447/spg"
+	"github.com/go-redis/redis/v8"
 	"log"
 	"os"
 	"os/signal"
@@ -51,9 +52,27 @@ func main() {
 
 	log.Println("NATS успешно запущен")
 
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Address,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+
+	_, err = redisClient.Ping(ctx).Result()
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
+	log.Println("Redis успешно запущен")
+
 	log.Println("Сервер успешно запущен")
 
-	repoPg := pg.NewRepositoryPg(poolPg, natsClient)
+	repoPgParams := pg.Params{
+		Db:    poolPg,
+		Nats:  natsClient,
+		Redis: redisClient,
+	}
+
+	repoPg := pg.NewRepositoryPg(&repoPgParams)
 	repoCh := ch.NewRepositoryCh(poolCh)
 
 	pgService := servicePg.NewService(repoPg)

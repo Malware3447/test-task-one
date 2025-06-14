@@ -2,12 +2,15 @@ package pg
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-redis/redis/v8"
 	"github.com/jackc/pgx/v5"
 	"log"
 	"test-task-one/internal/models/ch"
 	"test-task-one/internal/models/pg"
+	"test-task-one/internal/models/responses"
 	"test-task-one/internal/nats"
 	"time"
 
@@ -15,21 +18,35 @@ import (
 )
 
 type RepositoryPg struct {
-	db   *pgxpool.Pool
-	nats *nats.NATSClient
+	db    *pgxpool.Pool
+	nats  *nats.NATSClient
+	redis *redis.Client
 }
 
-func NewRepositoryPg(db *pgxpool.Pool, nats *nats.NATSClient) Repository {
+type Params struct {
+	Db    *pgxpool.Pool
+	Nats  *nats.NATSClient
+	Redis *redis.Client
+}
+
+func NewRepositoryPg(params *Params) Repository {
 	return &RepositoryPg{
-		db:   db,
-		nats: nats,
+		db:    params.Db,
+		nats:  params.Nats,
+		redis: params.Redis,
 	}
 }
 
 func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name string) (*pg.Good, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	// Проверяем, существует ли проект
 	var exists bool
-	err := r.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)", projectID).Scan(&exists)
+	err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1) FOR UPDATE", projectID).Scan(&exists)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check project existence: %w", err)
 	}
@@ -37,15 +54,14 @@ func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name str
 	// Если проект не существует, создаем новый
 	if !exists {
 		const insertProject = `INSERT INTO projects (name) VALUES ($1) RETURNING id`
-		err := r.db.QueryRow(ctx, insertProject, fmt.Sprintf("Project for good: %s", name)).Scan(&projectID)
+		err := tx.QueryRow(ctx, insertProject, fmt.Sprintf("Project for good: %s", name)).Scan(&projectID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to insert project: %w", err)
 		}
 	}
 
-	// Теперь вставляем товар
 	const insertGood = `INSERT INTO goods (project_id, name, priority)
-    VALUES ($1, $2, (SELECT COALESCE(MAX(priority), 0) + 1 FROM goods WHERE project_id = $1))
+    VALUES ($1, $2, (SELECT COALESCE(MAX(priority), 0) + 1 FROM goods WHERE project_id = $1 FOR UPDATE))
     RETURNING id, priority, created_at`
 
 	newGood := &pg.Good{
@@ -53,9 +69,13 @@ func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name str
 		Name:      name,
 	}
 
-	err = r.db.QueryRow(ctx, insertGood, projectID, name).Scan(&newGood.ID, &newGood.Priority, &newGood.CreatedAt)
+	err = tx.QueryRow(ctx, insertGood, projectID, name).Scan(&newGood.ID, &newGood.Priority, &newGood.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert good: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	event := &ch.Event{
@@ -74,7 +94,16 @@ func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name str
 	return newGood, nil
 }
 
-func (r *RepositoryPg) GetGood(ctx context.Context, id int32) (*pg.Good, error) {
+func (r *RepositoryPg) GetProject(ctx context.Context, projectID int32) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)", projectID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check project existence: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *RepositoryPg) GetGood(ctx context.Context, id int32) (*pg.Good, bool, error) {
 	var good pg.Good
 	err := r.db.QueryRow(ctx, `
         SELECT id, project_id, name, description, priority, removed, created_at 
@@ -92,11 +121,11 @@ func (r *RepositoryPg) GetGood(ctx context.Context, id int32) (*pg.Good, error) 
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("good not found: %w", err)
+			return nil, false, fmt.Errorf("good not found: %w", err)
 		}
-		return nil, fmt.Errorf("failed to get good: %w", err)
+		return nil, false, fmt.Errorf("failed to get good: %w", err)
 	}
-	return &good, nil
+	return &good, true, nil
 }
 
 func (r *RepositoryPg) UpdateGood(ctx context.Context, id int32, name, description *string) (*pg.Good, error) {
@@ -106,7 +135,7 @@ func (r *RepositoryPg) UpdateGood(ctx context.Context, id int32, name, descripti
 	}
 	defer tx.Rollback(ctx)
 
-	good, err := r.GetGood(ctx, id)
+	good, _, err := r.GetGood(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +144,7 @@ func (r *RepositoryPg) UpdateGood(ctx context.Context, id int32, name, descripti
 		good.Name = *name
 	}
 	if description != nil {
-		good.Description = *description
+		good.Description = description
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -135,7 +164,7 @@ func (r *RepositoryPg) UpdateGood(ctx context.Context, id int32, name, descripti
 		ID:          good.ID,
 		ProjectID:   good.ProjectID,
 		Name:        good.Name,
-		Description: good.Description,
+		Description: *good.Description,
 		Priority:    good.Priority,
 		Removed:     good.Removed,
 		EventTime:   time.Now(),
@@ -144,19 +173,29 @@ func (r *RepositoryPg) UpdateGood(ctx context.Context, id int32, name, descripti
 		fmt.Printf("Failed to publish event: %v\n", err)
 	}
 
+	// Кешируем обновленные данные
+	cacheKey := fmt.Sprintf("good:%d", id)
+	jsonData, err := json.Marshal(good)
+	if err == nil {
+		// Устанавливаем кеш без времени истечения
+		if err := r.redis.Set(ctx, cacheKey, jsonData, 0).Err(); err != nil {
+			fmt.Printf("Failed to cache updated good: %v\n", err)
+		}
+	}
+
 	return good, nil
 }
 
-func (r *RepositoryPg) MarkAsRemoved(ctx context.Context, id int32) error {
+func (r *RepositoryPg) MarkAsRemoved(ctx context.Context, id int32) (responses.Remove, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return responses.Remove{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	good, err := r.GetGood(ctx, id)
+	good, _, err := r.GetGood(ctx, id)
 	if err != nil {
-		return err
+		return responses.Remove{}, err
 	}
 
 	good.Removed = true
@@ -167,7 +206,13 @@ func (r *RepositoryPg) MarkAsRemoved(ctx context.Context, id int32) error {
         WHERE id = $1
     `, id)
 	if err != nil {
-		return fmt.Errorf("failed to mark as removed: %w", err)
+		return responses.Remove{}, fmt.Errorf("failed to mark as removed: %w", err)
+	}
+
+	resp := responses.Remove{
+		Id:         good.ID,
+		CampaignId: good.ProjectID,
+		Removed:    true,
 	}
 
 	event := &ch.Event{
@@ -181,77 +226,100 @@ func (r *RepositoryPg) MarkAsRemoved(ctx context.Context, id int32) error {
 		fmt.Printf("Failed to publish event: %v\n", err)
 	}
 
-	return tx.Commit(ctx)
+	return resp, tx.Commit(ctx)
 }
 
-func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriority int32) ([]pg.Good, error) {
+func (r *RepositoryPg) ReprioritizeGood(ctx context.Context, id int32, newPriority int32) (responses.Reprioritize, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+		return responses.Reprioritize{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	good, err := r.GetGood(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
+	// Обновляем приоритет для указанной записи
 	_, err = tx.Exec(ctx, `
         UPDATE goods 
         SET priority = $1 
         WHERE id = $2
     `, newPriority, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to update priority: %w", err)
+		return responses.Reprioritize{}, fmt.Errorf("failed to update priority for id %d: %w", id, err)
 	}
 
+	// Обновляем приоритеты для записей с меньшим id
 	_, err = tx.Exec(ctx, `
         UPDATE goods 
         SET priority = priority + 1 
-        WHERE project_id = $1 
-          AND priority >= $2 
-          AND id != $3
-    `, good.ProjectID, newPriority, id)
+        WHERE id < $1
+    `, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to shift priorities: %w", err)
+		return responses.Reprioritize{}, fmt.Errorf("failed to update priorities for other goods: %w", err)
 	}
 
+	// Получаем все обновленные записи
 	rows, err := tx.Query(ctx, `
         SELECT id, priority 
         FROM goods 
-        WHERE project_id = $1 
-          AND priority >= $2
-        ORDER BY priority
-    `, good.ProjectID, newPriority)
+        WHERE id <= $1 
+        ORDER BY id
+    `, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get updated priorities: %w", err)
+		return responses.Reprioritize{}, fmt.Errorf("failed to fetch updated priorities: %w", err)
 	}
 	defer rows.Close()
 
-	var updated []pg.Good
+	var updatedPriorities []responses.Priorities
 	for rows.Next() {
-		var g pg.Good
-		err := rows.Scan(&g.ID, &g.Priority)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan priority: %w", err)
+		var p responses.Priorities
+		if err := rows.Scan(&p.Id, &p.Priority); err != nil {
+			return responses.Reprioritize{}, fmt.Errorf("failed to scan priority: %w", err)
 		}
-		updated = append(updated, g)
+		updatedPriorities = append(updatedPriorities, p)
+
+		// Отправляем событие в NATS для каждой измененной записи
+		event := &ch.Event{
+			ID:        p.Id,
+			Priority:  p.Priority,
+			EventTime: time.Now(),
+		}
+		if err := r.nats.PublishEvent(ctx, event); err != nil {
+			fmt.Printf("Failed to publish event for id %d: %v\n", p.Id, err)
+		} else {
+			log.Printf("Событие успешно отправлено в NATS для id %d\n", p.Id)
+		}
 	}
 
-	return updated, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return responses.Reprioritize{}, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	result := responses.Reprioritize{Priorities: updatedPriorities}
+
+	return result, nil
 }
+func (r *RepositoryPg) ListGoods(ctx context.Context, limit, offset int32) (responses.List, error) {
+	cacheKey := fmt.Sprintf("goods:list:%d:%d", limit, offset)
 
-func (r *RepositoryPg) ListGoods(ctx context.Context, limit, offset int32) ([]pg.Good, int, int, error) {
-	var total int
-	err := r.db.QueryRow(ctx, "SELECT COUNT(*) FROM goods").Scan(&total)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("failed to get total count: %w", err)
+	// Попытка получить данные из кеша
+	cachedData, err := r.redis.Get(ctx, cacheKey).Bytes()
+	if err == nil {
+		var cachedList responses.List
+		if err := json.Unmarshal(cachedData, &cachedList); err == nil {
+			return cachedList, nil
+		}
 	}
 
-	var removedCount int
+	// Если данных нет в кеше или произошла ошибка при их получении, выполняем запрос к БД
+	var total int32
+	err = r.db.QueryRow(ctx, "SELECT COUNT(*) FROM goods").Scan(&total)
+	if err != nil {
+		return responses.List{}, fmt.Errorf("failed to get total count: %w", err)
+	}
+
+	var removedCount int32
 	err = r.db.QueryRow(ctx, "SELECT COUNT(*) FROM goods WHERE removed = true").Scan(&removedCount)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("failed to get removed count: %w", err)
+		return responses.List{}, fmt.Errorf("failed to get removed count: %w", err)
 	}
 
 	rows, err := r.db.Query(ctx, `
@@ -261,27 +329,43 @@ func (r *RepositoryPg) ListGoods(ctx context.Context, limit, offset int32) ([]pg
         LIMIT $1 OFFSET $2
     `, limit, offset)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("failed to get goods list: %w", err)
+		return responses.List{}, fmt.Errorf("failed to get goods list: %w", err)
 	}
 	defer rows.Close()
 
-	var goods []pg.Good
+	var goods []responses.Goods
 	for rows.Next() {
-		var g pg.Good
+		var g responses.Goods
 		err := rows.Scan(
-			&g.ID,
-			&g.ProjectID,
+			&g.Id,
+			&g.ProjectId,
 			&g.Name,
 			&g.Description,
 			&g.Priority,
-			&g.Removed,
+			&g.Romoved,
 			&g.CreatedAt,
 		)
 		if err != nil {
-			return nil, 0, 0, fmt.Errorf("failed to scan good: %w", err)
+			return responses.List{}, fmt.Errorf("failed to scan good: %w", err)
 		}
 		goods = append(goods, g)
 	}
 
-	return goods, total, removedCount, nil
+	resp := responses.List{
+		Meta: responses.Meta{
+			Total:   total,
+			Removed: removedCount,
+			Limit:   limit,
+			Offset:  offset,
+		},
+		Goods: goods,
+	}
+
+	// Кешируем результат в Redis на 1 минуту
+	jsonData, err := json.Marshal(resp)
+	if err == nil {
+		r.redis.Set(ctx, cacheKey, jsonData, time.Minute)
+	}
+
+	return resp, nil
 }

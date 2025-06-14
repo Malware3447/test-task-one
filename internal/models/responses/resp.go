@@ -39,7 +39,7 @@ type Goods struct {
 	Id          int32     `json:"id"`
 	ProjectId   int32     `json:"projectId"`
 	Name        string    `json:"name"`
-	Description string    `json:"description"`
+	Description *string   `json:"description"`
 	Priority    int32     `json:"priority"`
 	Romoved     bool      `json:"removed"`
 	CreatedAt   time.Time `json:"createdAt"`

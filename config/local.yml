@@ -27,3 +27,8 @@ clickhouse:
   migrationPath: "migrations/ch"
   maxAttempts: 5
   attemptDelay: 1s
+
+redis:
+  host: localhost
+  port: 6379
+  db: 0
