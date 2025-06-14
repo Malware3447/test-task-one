@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	"log"
 	"test-task-one/internal/models/ch"
 	"test-task-one/internal/models/pg"
 	"test-task-one/internal/nats"
@@ -65,8 +66,9 @@ func (r *RepositoryPg) CreateGood(ctx context.Context, projectID int32, name str
 		EventTime: newGood.CreatedAt,
 	}
 	if err := r.nats.PublishEvent(ctx, event); err != nil {
-		// Логируем ошибку, но не прерываем выполнение
 		fmt.Printf("Failed to publish event: %v\n", err)
+	} else {
+		log.Println("Событие успешно отправлено в NATS")
 	}
 
 	return newGood, nil

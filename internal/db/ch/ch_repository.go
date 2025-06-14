@@ -42,6 +42,7 @@ func (r *RepositoryCh) LogEvent(ctx context.Context, event *ch.Event) error {
 		clickhouse.Named("id", event.ID),
 		clickhouse.Named("project_id", event.ProjectID),
 		clickhouse.Named("name", event.Name),
+		clickhouse.Named("description", event.Description),
 		clickhouse.Named("priority", event.Priority),
 		clickhouse.Named("removed", event.Removed),
 		clickhouse.Named("event_time", event.EventTime),

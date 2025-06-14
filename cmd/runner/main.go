@@ -67,6 +67,8 @@ func main() {
 
 	crutHandler := crut.NewCrut(crutParams)
 
+	go crutHandler.ProcessNATSMessages(ctx)
+
 	crutService := serviceCrut.NewService(crutHandler)
 
 	router := request.NewRouter(crutService)

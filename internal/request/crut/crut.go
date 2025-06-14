@@ -7,8 +7,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	modelsEvent "test-task-one/internal/models/ch"
 	"test-task-one/internal/models/requests"
-	"test-task-one/internal/nats"
+	natsClient "test-task-one/internal/nats"
 	"test-task-one/internal/service/db/ch"
 	"test-task-one/internal/service/db/pg"
 )
@@ -16,13 +17,13 @@ import (
 type Crut struct {
 	repoPg *pg.Service
 	repoCh *ch.Service
-	nats   *nats.NATSClient
+	nats   *natsClient.NATSClient
 }
 
 type Params struct {
 	RepoPg *pg.Service
 	RepoCh *ch.Service
-	NATS   *nats.NATSClient
+	NATS   *natsClient.NATSClient
 }
 
 func NewCrut(params Params) CrutHudnler {
@@ -33,6 +34,22 @@ func NewCrut(params Params) CrutHudnler {
 	}
 }
 
+func (c *Crut) ProcessNATSMessages(ctx context.Context) {
+	go func() {
+		err := c.nats.ProcessMessages("goods.events", func(event *modelsEvent.Event) error {
+			err := c.repoCh.LogEvent(ctx, event)
+			if err != nil {
+				log.Printf("Failed to log event in ClickHouse: %v", err)
+				return err
+			}
+			log.Printf("Event successfully logged in ClickHouse: %v", event.ID)
+			return nil
+		})
+		if err != nil {
+			log.Printf("Failed to process NATS messages: %v", err)
+		}
+	}()
+}
 func (c *Crut) CreateGood(w http.ResponseWriter, r *http.Request) {
 	const op = "router.CreateGood"
 	ctx := context.WithValue(r.Context(), "router", op)
